@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat Overlay</title>
+
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+#chatWrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  box-sizing: border-box;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  overflow: hidden;
+}
+
+#chatWrap.visible {
+  opacity: 1;
+}
+
+.chatLine {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+
+  padding: 10px 12px;
+
+  width: 100%;
+  box-sizing: border-box;
+
+  border-radius: 12px; /* 👈 ADD THIS */
+}
+
+.avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.content {
+  flex: 1;
+}
+
+.name {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 2px;
+  color: #ffffff;
+  text-shadow: 0 2px 3px rgba(0,0,0,0.6);
+}
+
+.message {
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  word-break: break-word;
+  text-shadow: 0 2px 3px rgba(0,0,0,0.7);
+}
+
+.message img.emote {
+  height: 2.5em;
+  vertical-align: middle;
+}
+</style>
+</head>
+
+<body>
+<div id="chatWrap"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@streamerbot/client/dist/streamerbot-client.js"></script>
+
+<script>
+const SHOW_MS = Infinity;
+const MAX_MESSAGES = 20;
+const DELAY = 100;
+
+const chatWrap = document.getElementById("chatWrap");
+let messages = [];
+let lastActivity = 0;
+
+const FALLBACK_AVATAR = "https://static-cdn.jtvnw.net/jtv_user_pictures/xarth/404_user_70x70.png";
+
+const ignoredBots = new Set([
+  "streamlabs",
+  "streamelements",
+  "soundalerts",
+  "nightbot",
+  "moobot",
+  "fossabot",
+  "wizebot",
+  "botrix",
+  "botrixoficial",
+  "streamstickers",
+  "frostytoolsdotcom",
+  "ankhbot",
+  "deepbot",
+  "commanderroot",
+  "sery_bot",
+  "mixitupapp",
+  "kofistreambot",
+  "supibot",
+  "phantombot",
+  "firebot",
+  "songlistbot",
+  "pokemoncommunitygame"
+]);
+
+function getUser(data) {
+  return data?.message?.displayName || data?.targetUser || "User";
+}
+
+function getLogin(data) {
+  return String(
+    data?.message?.username ||
+    data?.user?.login ||
+    data?.login ||
+    data?.targetUser ||
+    ""
+  ).toLowerCase();
+}
+
+function getText(data) {
+  return String(data?.message?.message || "");
+}
+
+function getColor(data) {
+  return data?.message?.color || "#3aa8ff";
+}
+
+function getEmotes(data) {
+  return data?.message?.emotes || [];
+}
+
+function ignore(data) {
+  const msg = getText(data).trim();
+  const user = getLogin(data);
+
+  if (!msg) return true;
+  if (msg.startsWith("!")) return true;
+  if (msg.startsWith("/")) return true;
+  if (ignoredBots.has(user)) return true;
+
+  return false;
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function buildHTML(text, emotes) {
+  const safeText = String(text || "");
+  const list = Array.isArray(emotes) ? emotes.slice() : [];
+
+  if (!list.length) return escapeHtml(safeText);
+
+  list.sort((a, b) => a.startIndex - b.startIndex);
+
+  let result = "";
+  let last = 0;
+
+  for (const e of list) {
+    if (
+      typeof e.startIndex !== "number" ||
+      typeof e.endIndex !== "number" ||
+      !e.imageUrl
+    ) {
+      continue;
+    }
+
+    result += escapeHtml(safeText.slice(last, e.startIndex));
+    result += `<img class="emote" src="${escapeHtml(e.imageUrl)}" alt="">`;
+    last = e.endIndex + 1;
+  }
+
+  result += escapeHtml(safeText.slice(last));
+  return result;
+}
+
+function addMessage(data) {
+  if (ignore(data)) return;
+
+  const now = Date.now();
+
+  messages.unshift({
+    id: String(now) + "_" + Math.random().toString(36).slice(2, 8),
+    user: getUser(data),
+    login: getLogin(data),
+    text: getText(data).trim(),
+    html: buildHTML(getText(data), getEmotes(data)),
+    color: getColor(data),
+    avatar: FALLBACK_AVATAR,
+    time: now
+  });
+
+  messages = messages.filter(m => now - m.time < SHOW_MS).slice(0, MAX_MESSAGES);
+  lastActivity = now;
+
+  render();
+}
+
+function applyAvatarPacket(raw) {
+  let packet = raw;
+
+  try {
+    if (packet && typeof packet.data === "string") {
+      packet = JSON.parse(packet.data);
+    } else if (typeof packet === "string") {
+      packet = JSON.parse(packet);
+    }
+  } catch {
+    return;
+  }
+
+  if (!packet || packet.event !== "chatOverlayAvatar") return;
+
+  const user = String(packet.user || "").trim().toLowerCase();
+  const text = String(packet.message || "").trim();
+  const avatar = String(packet.avatar || "").trim();
+
+  if (!user || !text || !avatar) return;
+
+  for (let i = 0; i < messages.length; i++) {
+    const item = messages[i];
+
+    if (
+      item.login === user &&
+      item.text === text &&
+      Math.abs(Date.now() - item.time) <= 5000
+    ) {
+      item.avatar = avatar;
+      break;
+    }
+  }
+
+  render();
+}
+
+function render() {
+  const now = Date.now();
+
+  messages = messages.filter(m => now - m.time < SHOW_MS);
+
+  chatWrap.innerHTML = "";
+
+  for (const m of messages) {
+    const line = document.createElement("div");
+    line.className = "chatLine";
+
+    line.style.background = `linear-gradient(
+      90deg,
+      ${m.color}66 0%,
+      ${m.color}66 100%
+    )`;
+
+    const avatar = document.createElement("img");
+    avatar.className = "avatar";
+    avatar.src = m.avatar || FALLBACK_AVATAR;
+    avatar.alt = m.user;
+    avatar.onerror = function () {
+      this.src = FALLBACK_AVATAR;
+    };
+
+    const content = document.createElement("div");
+    content.className = "content";
+
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = m.user;
+
+    const msg = document.createElement("div");
+    msg.className = "message";
+    msg.innerHTML = m.html;
+
+    content.appendChild(name);
+    content.appendChild(msg);
+
+    line.appendChild(avatar);
+    line.appendChild(content);
+
+    chatWrap.appendChild(line);
+  }
+
+  if (messages.length && (now - lastActivity < SHOW_MS)) {
+    chatWrap.classList.add("visible");
+  } else {
+    chatWrap.classList.remove("visible");
+  }
+}
+
+const client = new StreamerbotClient({
+  host: "127.0.0.1",
+  port: 8080
+});
+
+client.on("Twitch.ChatMessage", ({ data }) => {
+  setTimeout(() => addMessage(data), DELAY);
+});
+
+client.on("General.Custom", ({ data }) => {
+  applyAvatarPacket(data);
+});
+
+setInterval(render, 500);
+</script>
+</body>
+</html>
