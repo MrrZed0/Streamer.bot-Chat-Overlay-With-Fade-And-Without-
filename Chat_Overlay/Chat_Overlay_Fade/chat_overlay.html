@@ -21,48 +21,91 @@ html, body {
   inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 6px;
   box-sizing: border-box;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  overflow: hidden;
-}
-
-#chatWrap.visible {
   opacity: 1;
+  overflow: hidden;
 }
 
 .chatLine {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-
   padding: 10px 12px;
-
   width: 100%;
   box-sizing: border-box;
+  border-radius: 12px;
+  opacity: 0;
+  transform: translateX(-30px);
+  animation: chatSlideIn 0.35s ease forwards;
+  position: relative;
+}
 
-  border-radius: 12px; /* 👈 ADD THIS */
+.chatLine::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+@keyframes chatSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateX(-30px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .avatar {
-  width: 42px;
-  height: 42px;
+  width: 72px;
+  height: 72px;
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
+  display: block;
+  box-shadow: 0 0 10px rgba(0,0,0,0.35);
 }
 
 .content {
   flex: 1;
+  min-width: 0;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.badge {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 
 .name {
   font-size: 16px;
   font-weight: 700;
-  margin-bottom: 2px;
+  line-height: 1.1;
   color: #ffffff;
   text-shadow: 0 2px 3px rgba(0,0,0,0.6);
+  word-break: break-word;
 }
 
 .message {
@@ -74,8 +117,16 @@ html, body {
 }
 
 .message img.emote {
-  height: 2.5em;
+  height: 3.6em;
   vertical-align: middle;
+}
+
+.glowLayer {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  opacity: 0.45;
 }
 </style>
 </head>
@@ -86,13 +137,12 @@ html, body {
 <script src="https://cdn.jsdelivr.net/npm/@streamerbot/client/dist/streamerbot-client.js"></script>
 
 <script>
-const SHOW_MS = 30000;
 const MAX_MESSAGES = 20;
 const DELAY = 100;
+const SHOW_MS = 30000;
 
 const chatWrap = document.getElementById("chatWrap");
 let messages = [];
-let lastActivity = 0;
 
 const FALLBACK_AVATAR = "https://static-cdn.jtvnw.net/jtv_user_pictures/xarth/404_user_70x70.png";
 
@@ -121,8 +171,22 @@ const ignoredBots = new Set([
   "pokemoncommunitygame"
 ]);
 
+function escapeHtml(text) {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function getUser(data) {
-  return data?.message?.displayName || data?.targetUser || "User";
+  return (
+    data?.message?.displayName ||
+    data?.displayName ||
+    data?.targetUser ||
+    "User"
+  );
 }
 
 function getLogin(data) {
@@ -136,15 +200,28 @@ function getLogin(data) {
 }
 
 function getText(data) {
-  return String(data?.message?.message || "");
+  return String(
+    data?.message?.message ||
+    data?.text ||
+    ""
+  );
 }
 
 function getColor(data) {
-  return data?.message?.color || "#3aa8ff";
+  return data?.message?.color || data?.color || "#3aa8ff";
 }
 
 function getEmotes(data) {
-  return data?.message?.emotes || [];
+  return data?.message?.emotes || data?.emotes || [];
+}
+
+function getBadges(data) {
+  return (
+    data?.message?.badges ||
+    data?.badges ||
+    data?.message?.userBadges ||
+    []
+  );
 }
 
 function ignore(data) {
@@ -159,42 +236,112 @@ function ignore(data) {
   return false;
 }
 
-function escapeHtml(text) {
-  return String(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function buildHTML(text, emotes) {
+function buildMessageHtml(text, emotes) {
   const safeText = String(text || "");
   const list = Array.isArray(emotes) ? emotes.slice() : [];
 
-  if (!list.length) return escapeHtml(safeText);
+  const valid = list
+    .filter(e =>
+      e &&
+      typeof e.startIndex === "number" &&
+      typeof e.endIndex === "number" &&
+      e.startIndex >= 0 &&
+      e.endIndex >= e.startIndex &&
+      e.imageUrl
+    )
+    .sort((a, b) => a.startIndex - b.startIndex);
 
-  list.sort((a, b) => a.startIndex - b.startIndex);
-
-  let result = "";
-  let last = 0;
-
-  for (const e of list) {
-    if (
-      typeof e.startIndex !== "number" ||
-      typeof e.endIndex !== "number" ||
-      !e.imageUrl
-    ) {
-      continue;
-    }
-
-    result += escapeHtml(safeText.slice(last, e.startIndex));
-    result += `<img class="emote" src="${escapeHtml(e.imageUrl)}" alt="">`;
-    last = e.endIndex + 1;
+  if (!valid.length) {
+    return escapeHtml(safeText);
   }
 
-  result += escapeHtml(safeText.slice(last));
-  return result;
+  let html = "";
+  let cursor = 0;
+
+  for (const emote of valid) {
+    const start = emote.startIndex;
+    const end = emote.endIndex + 1;
+
+    if (start > cursor) {
+      html += escapeHtml(safeText.slice(cursor, start));
+    }
+
+    html += '<img class="emote" src="' + escapeHtml(emote.imageUrl) + '" alt="' +
+      escapeHtml(emote.name || safeText.slice(start, end)) + '">';
+
+    cursor = end;
+  }
+
+  if (cursor < safeText.length) {
+    html += escapeHtml(safeText.slice(cursor));
+  }
+
+  return html;
+}
+
+function normalizeBadge(badge) {
+  if (!badge) return null;
+
+  if (typeof badge === "string") {
+    const key = badge.toLowerCase();
+    return {
+      key,
+      imageUrl: badgeUrlFromKey(key)
+    };
+  }
+
+  const key = String(
+    badge.name ||
+    badge.id ||
+    badge.setId ||
+    badge.type ||
+    ""
+  ).toLowerCase();
+
+  const imageUrl =
+    badge.imageUrl ||
+    badge.url ||
+    badge.image ||
+    badge.icon ||
+    badge.badgeImageUrl ||
+    badgeUrlFromKey(key);
+
+  if (!key && !imageUrl) return null;
+
+  return { key, imageUrl };
+}
+
+function badgeUrlFromKey(key) {
+  if (!key) return "";
+
+  if (key.includes("moderator") || key === "mod") {
+    return "https://static-cdn.jtvnw.net/badges/v1/3267646d-33f0-4b17-b3df-f923a41db1d0/3";
+  }
+
+  if (key.includes("vip")) {
+    return "https://static-cdn.jtvnw.net/badges/v1/b817aba4-fad8-49e2-b88a-7cc744dfa6ec/3";
+  }
+
+  if (key.includes("subscriber") || key.includes("sub")) {
+    return "https://static-cdn.jtvnw.net/badges/v1/4a9f6b5d-09e6-4f40-bc2d-5b3a1d3f5e14/3";
+  }
+
+  return "";
+}
+
+function buildBadgesHtml(badges) {
+  if (!Array.isArray(badges) || !badges.length) return "";
+
+  let html = "";
+
+  for (const raw of badges) {
+    const badge = normalizeBadge(raw);
+    if (!badge || !badge.imageUrl) continue;
+
+    html += `<img class="badge" src="${escapeHtml(badge.imageUrl)}" alt="${escapeHtml(badge.key || "badge")}">`;
+  }
+
+  return html;
 }
 
 function addMessage(data) {
@@ -207,15 +354,14 @@ function addMessage(data) {
     user: getUser(data),
     login: getLogin(data),
     text: getText(data).trim(),
-    html: buildHTML(getText(data), getEmotes(data)),
+    html: buildMessageHtml(getText(data), getEmotes(data)),
+    badgesHtml: buildBadgesHtml(getBadges(data)),
     color: getColor(data),
     avatar: FALLBACK_AVATAR,
     time: now
   });
 
-  messages = messages.filter(m => now - m.time < SHOW_MS).slice(0, MAX_MESSAGES);
-  lastActivity = now;
-
+  messages = messages.slice(0, MAX_MESSAGES);
   render();
 }
 
@@ -257,10 +403,6 @@ function applyAvatarPacket(raw) {
 }
 
 function render() {
-  const now = Date.now();
-
-  messages = messages.filter(m => now - m.time < SHOW_MS);
-
   chatWrap.innerHTML = "";
 
   for (const m of messages) {
@@ -273,6 +415,15 @@ function render() {
       ${m.color}99 100%
     )`;
 
+    line.style.boxShadow = `
+      0 0 14px ${m.color}55,
+      0 2px 10px rgba(0,0,0,0.35)
+    `;
+
+    const glow = document.createElement("div");
+    glow.className = "glowLayer";
+    glow.style.boxShadow = `inset 0 0 18px ${m.color}44`;
+
     const avatar = document.createElement("img");
     avatar.className = "avatar";
     avatar.src = m.avatar || FALLBACK_AVATAR;
@@ -284,27 +435,33 @@ function render() {
     const content = document.createElement("div");
     content.className = "content";
 
+    const headerRow = document.createElement("div");
+    headerRow.className = "headerRow";
+
+    const badges = document.createElement("div");
+    badges.className = "badges";
+    badges.innerHTML = m.badgesHtml;
+
     const name = document.createElement("div");
     name.className = "name";
     name.textContent = m.user;
+    name.style.textShadow = `0 0 10px ${m.color}88, 0 2px 3px rgba(0,0,0,0.6)`;
 
     const msg = document.createElement("div");
     msg.className = "message";
     msg.innerHTML = m.html;
 
-    content.appendChild(name);
+    headerRow.appendChild(badges);
+    headerRow.appendChild(name);
+
+    content.appendChild(headerRow);
     content.appendChild(msg);
 
+    line.appendChild(glow);
     line.appendChild(avatar);
     line.appendChild(content);
 
     chatWrap.appendChild(line);
-  }
-
-  if (messages.length && (now - lastActivity < SHOW_MS)) {
-    chatWrap.classList.add("visible");
-  } else {
-    chatWrap.classList.remove("visible");
   }
 }
 
@@ -320,8 +477,6 @@ client.on("Twitch.ChatMessage", ({ data }) => {
 client.on("General.Custom", ({ data }) => {
   applyAvatarPacket(data);
 });
-
-setInterval(render, 500);
 </script>
 </body>
 </html>
