@@ -23,8 +23,13 @@ html, body {
   flex-direction: column;
   gap: 6px;
   box-sizing: border-box;
-  opacity: 1;
+  opacity: 0;
   overflow: hidden;
+  transition: opacity 0.35s ease;
+}
+
+#chatWrap.visible {
+  opacity: 1;
 }
 
 .chatLine {
@@ -35,30 +40,25 @@ html, body {
   width: 100%;
   box-sizing: border-box;
   border-radius: 12px;
-  opacity: 0;
-  transform: translateX(-30px);
-  animation: chatSlideIn 0.35s ease forwards;
   position: relative;
-}
-
-.chatLine::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 12px;
-  pointer-events: none;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
 }
 
 @keyframes chatSlideIn {
   0% {
     opacity: 0;
-    transform: translateX(-30px);
+    transform: translateX(-25px);
   }
   100% {
     opacity: 1;
     transform: translateX(0);
   }
+}
+
+.glowLayer {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  pointer-events: none;
 }
 
 .avatar {
@@ -111,7 +111,7 @@ html, body {
 .message {
   font-size: 20px;
   font-weight: 700;
-  color: #fff;
+  color: #ffffff;
   word-break: break-word;
   text-shadow: 0 2px 3px rgba(0,0,0,0.7);
 }
@@ -119,14 +119,6 @@ html, body {
 .message img.emote {
   height: 3.6em;
   vertical-align: middle;
-}
-
-.glowLayer {
-  position: absolute;
-  inset: 0;
-  border-radius: 12px;
-  pointer-events: none;
-  opacity: 0.45;
 }
 </style>
 </head>
@@ -137,9 +129,9 @@ html, body {
 <script src="https://cdn.jsdelivr.net/npm/@streamerbot/client/dist/streamerbot-client.js"></script>
 
 <script>
+const SHOW_MS = 30000;
 const MAX_MESSAGES = 20;
 const DELAY = 100;
-const SHOW_MS = 30000;
 
 const chatWrap = document.getElementById("chatWrap");
 let messages = [];
@@ -224,7 +216,7 @@ function getBadges(data) {
   );
 }
 
-function ignore(data) {
+function shouldIgnore(data) {
   const msg = getText(data).trim();
   const user = getLogin(data);
 
@@ -345,7 +337,7 @@ function buildBadgesHtml(badges) {
 }
 
 function addMessage(data) {
-  if (ignore(data)) return;
+  if (shouldIgnore(data)) return;
 
   const now = Date.now();
 
@@ -403,6 +395,10 @@ function applyAvatarPacket(raw) {
 }
 
 function render() {
+  const now = Date.now();
+
+  messages = messages.filter(m => now - m.time < SHOW_MS);
+
   chatWrap.innerHTML = "";
 
   for (const m of messages) {
@@ -411,8 +407,8 @@ function render() {
 
     line.style.background = `linear-gradient(
       90deg,
-      ${m.color}99 0%,
-      ${m.color}99 100%
+      ${m.color}77 0%,
+      ${m.color}77 100%
     )`;
 
     line.style.boxShadow = `
@@ -463,6 +459,12 @@ function render() {
 
     chatWrap.appendChild(line);
   }
+
+  if (messages.length > 0) {
+    chatWrap.classList.add("visible");
+  } else {
+    chatWrap.classList.remove("visible");
+  }
 }
 
 const client = new StreamerbotClient({
@@ -477,6 +479,8 @@ client.on("Twitch.ChatMessage", ({ data }) => {
 client.on("General.Custom", ({ data }) => {
   applyAvatarPacket(data);
 });
+
+setInterval(render, 500);
 </script>
 </body>
 </html>
